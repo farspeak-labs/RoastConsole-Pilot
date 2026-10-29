@@ -1,0 +1,73 @@
+name: Publish Release
+
+# Publishes a GitHub Release for RoastConsole Pilot in this public
+# distribution repo. Building and code-signing happen elsewhere (the private
+# source repo's CI, or a local signed build) — this workflow only creates the
+# release shell; you then attach the signed installers to it.
+#
+# Two ways to trigger:
+#   • Manually: Actions → Publish Release → Run workflow (enter the version).
+#   • By tag:   push a tag like v1.0.8.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version, e.g. 1.0.8 (creates tag v1.0.8)"
+        required: true
+        type: string
+      prerelease:
+        description: "Mark as pre-release"
+        type: boolean
+        default: true
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Resolve tag + flags
+        id: meta
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ inputs.version }}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=${{ inputs.prerelease }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+            echo "prerelease=true" >> "$GITHUB_OUTPUT"   # tag-triggered builds default to pre-release
+          fi
+
+      - name: Create release (if it doesn't exist yet)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.meta.outputs.tag }}
+          PRE: ${{ steps.meta.outputs.prerelease }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — leaving it as-is."
+            exit 0
+          fi
+          args=( "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA"
+                 --generate-notes --title "RoastConsole Pilot ${TAG#v}" )
+          if [ "$PRE" = "true" ]; then args+=( --prerelease ); fi
+          gh release create "${args[@]}"
+          echo "Created release $TAG."
+
+      - name: How to attach signed installers
+        env:
+          TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          echo "Release shell ready: $TAG"
+          echo "Attach signed builds with, e.g.:"
+          echo "  gh release upload $TAG RoastConsolePilot-Setup-${TAG#v}.exe --repo $GITHUB_REPOSITORY"
+          echo "From the private repo's signing CI, run that step with a PAT that has"
+          echo "contents:write on this repo (store it there as a secret, e.g. DIST_REPO_TOKEN)."
